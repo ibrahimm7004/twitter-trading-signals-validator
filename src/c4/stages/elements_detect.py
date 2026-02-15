@@ -360,6 +360,7 @@ def run(
     axis_ticks: list[object],
     scale: str,
     debug_dir: str | Path | None,
+    current_x_px: float | None = None,
 ) -> StageResult[list[ChartElement]]:
     image = cv2.imread(str(image_path))
     if image is None:
@@ -466,6 +467,20 @@ def run(
 
     if debug_dir is not None:
         dbg = plot_crop.copy()
+        if current_x_px is not None and dbg.shape[1] > 0 and dbg.shape[0] > 0:
+            x_local = int(round(float(current_x_px) - float(px0)))
+            x_local = max(0, min(x_local, dbg.shape[1] - 1))
+            cv2.line(dbg, (x_local, 0), (x_local, dbg.shape[0] - 1), (255, 0, 255), 2)
+            cv2.putText(
+                dbg,
+                "current_x",
+                (max(0, x_local - 40), 16),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (255, 0, 255),
+                1,
+                cv2.LINE_AA,
+            )
         for x0, y0, x1, y1 in zones:
             cv2.rectangle(dbg, (x0, y0), (x1, y1), (0, 255, 255), 2)
             if mapper is not None:

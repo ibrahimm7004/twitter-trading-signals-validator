@@ -11,7 +11,7 @@ import cv2
 
 from .debug.draw import draw_boxes_with_labels
 from .schema import OutputSchema, empty_output
-from .stages import axis_ocr, calibration, elements_detect, frame, scenario_reconstruct
+from .stages import axis_ocr, calibration, candles_detect, elements_detect, frame, scenario_reconstruct
 from .types import AbstainReason, StageResult
 
 
@@ -29,6 +29,14 @@ def run_pipeline(image_path: str | Path, config: C4Config, debug_dir: str | Path
     stage_frame = frame.run(image_path=image_path, config=config)
     axis_bbox = stage_frame.data.axis_bbox if stage_frame.data is not None else None
     stage_axis = axis_ocr.run(image_path=image_path, axis_bbox=axis_bbox, config=config)
+    stage_candles: StageResult[float | None] = StageResult(data=None, confidence=0.0, abstain=False, reasons=[], debug={})
+    if stage_frame.data is not None:
+        stage_candles = candles_detect.run(
+            image_path=image_path,
+            plot_bbox=stage_frame.data.plot_bbox,
+            axis_bbox=stage_frame.data.axis_bbox,
+            config=config,
+        )
 
     stage_calib = calibration.run(stage_axis.data or [], config=config)
     if stage_calib.data is not None and stage_frame.data is not None:
@@ -43,6 +51,7 @@ def run_pipeline(image_path: str | Path, config: C4Config, debug_dir: str | Path
             axis_ticks=stage_axis.data,
             scale=stage_calib.data.scale,
             debug_dir=debug_dir,
+            current_x_px=stage_candles.data,
         )
 
     stage_scenario: StageResult = StageResult(data=None, confidence=0.0, abstain=False, reasons=[], debug={})
@@ -51,6 +60,7 @@ def run_pipeline(image_path: str | Path, config: C4Config, debug_dir: str | Path
             plot_bbox=stage_frame.data.plot_bbox,
             elements=stage_elements.data or [],
             config=config,
+            current_x_px=stage_candles.data,
         )
 
     if stage_frame.data is not None:

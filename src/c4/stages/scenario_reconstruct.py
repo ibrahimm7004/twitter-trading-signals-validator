@@ -28,7 +28,12 @@ def _line_points_with_prices(elem: ChartElement) -> tuple[tuple[float, float, fl
     return (float(p1[0]), float(p1[1]), float(price1)), (float(p2[0]), float(p2[1]), float(price2))
 
 
-def run(plot_bbox: list[float], elements: list[ChartElement], config: C4Config) -> StageResult[Scenario]:
+def run(
+    plot_bbox: list[float],
+    elements: list[ChartElement],
+    config: C4Config,
+    current_x_px: float | None = None,
+) -> StageResult[Scenario]:
     plot_x0, plot_y0, plot_x1, plot_y1 = [float(v) for v in plot_bbox]
     plot_w = max(1.0, plot_x1 - plot_x0)
     plot_h = max(1.0, plot_y1 - plot_y0)
@@ -71,16 +76,29 @@ def run(plot_bbox: list[float], elements: list[ChartElement], config: C4Config) 
     patterns: list[str] = []
     movement_type = "unknown"
 
-    # Current from right-most line endpoint.
+    # Current from line-evaluated price at current_x (when provided), else right-most endpoint.
     current_price: float | None = None
     if line_infos:
-        endpoints = []
-        for ln in line_infos:
-            endpoints.append(ln["left"])
-            endpoints.append(ln["right"])
-        current = max(endpoints, key=lambda p: p[0])
-        current_price = float(current[2])
-        waypoints.append(ScenarioWaypoint(label="current", price=current_price, conf=0.55))
+        main_for_current = max(line_infos, key=lambda ln: ln["length"])
+        used_eval = False
+        if current_x_px is not None:
+            left = main_for_current["left"]
+            right = main_for_current["right"]
+            dx = float(right[0] - left[0])
+            if abs(dx) > 1e-6:
+                t = (float(current_x_px) - float(left[0])) / dx
+                t = max(0.0, min(1.0, t))
+                current_price = float(left[2] + t * (right[2] - left[2]))
+                waypoints.append(ScenarioWaypoint(label="current", price=current_price, conf=0.60))
+                used_eval = True
+        if not used_eval:
+            endpoints = []
+            for ln in line_infos:
+                endpoints.append(ln["left"])
+                endpoints.append(ln["right"])
+            current = max(endpoints, key=lambda p: p[0])
+            current_price = float(current[2])
+            waypoints.append(ScenarioWaypoint(label="current", price=current_price, conf=0.55))
 
     # Entry from zones around current.
     entry_price: float | None = None
@@ -173,4 +191,3 @@ def run(plot_bbox: list[float], elements: list[ChartElement], config: C4Config) 
         confidence=conf,
     )
     return StageResult(data=scenario, confidence=conf, abstain=False, reasons=[], debug={})
-

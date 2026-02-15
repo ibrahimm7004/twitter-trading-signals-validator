@@ -227,9 +227,9 @@
     "waypoints": [
       {
         "label": "current",
-        "price": 185.54098360655738,
+        "price": 182.327868852459,
         "time_hint": null,
-        "conf": 0.55
+        "conf": 0.6
       },
       {
         "label": "zone",
@@ -244,7 +244,7 @@
         "conf": 0.72
       }
     ],
-    "confidence": 0.6633333333333333
+    "confidence": 0.68
   },
   "abstain": false,
   "abstain_reasons": [],

@@ -64,3 +64,18 @@ def test_confidence_positive_when_waypoints_present():
     out = scenario_reconstruct.run([0.0, 0.0, 1000.0, 600.0], elements, cfg)
     assert 0.0 <= out.data.confidence <= 1.0
     assert out.data.confidence > 0.0
+
+
+def test_current_price_uses_current_x_when_provided():
+    cfg = C4Config()
+    elements = [
+        ChartElement(
+            kind="line",
+            geometry_px={"p1": [100.0, 300.0], "p2": [900.0, 100.0]},
+            prices={"p1": 100.0, "p2": 200.0},
+            confidence=0.8,
+        )
+    ]
+    out = scenario_reconstruct.run([0.0, 0.0, 1000.0, 600.0], elements, cfg, current_x_px=500.0)
+    current = next(w for w in out.data.waypoints if w.label == "current")
+    assert abs(current.price - 150.0) < 1e-6
