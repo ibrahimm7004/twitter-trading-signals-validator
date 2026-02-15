@@ -512,13 +512,13 @@
     "waypoints": [
       {
         "label": "current",
-        "price": 152.77777777777777,
+        "price": 233.81453423120087,
         "time_hint": null,
         "conf": 0.6
       },
       {
         "label": "entry",
-        "price": 196.60493827160494,
+        "price": 311.875,
         "time_hint": null,
         "conf": 0.45
       },
@@ -547,13 +547,19 @@
         "conf": 0.72
       },
       {
+        "label": "target",
+        "price": 152.77777777777777,
+        "time_hint": null,
+        "conf": 0.5
+      },
+      {
         "label": "invalidation",
         "price": 395.5882352941176,
         "time_hint": null,
         "conf": 0.4
       }
     ],
-    "confidence": 0.6185714285714285
+    "confidence": 0.60375
   },
   "abstain": false,
   "abstain_reasons": [],
