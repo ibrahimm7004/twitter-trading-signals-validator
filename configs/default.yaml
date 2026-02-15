@@ -1,0 +1,16 @@
+# Default configuration for Component 4 (M1 scaffold)
+
+thresholds:
+  min_ticks: 6
+  frame_min_conf: 0.7
+  axis_min_conf: 0.7
+  calibration_max_error: 0.15
+  element_min_conf: 0.5
+
+runtime:
+  abstain_on_not_implemented: true
+  ocr_backend: "paddle"
+
+paths:
+  debug_overlay_name: "overlay.png"
+  axis_debug_name: "axis_debug.png"

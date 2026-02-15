@@ -1,0 +1,4 @@
+[c4.axis_ocr] backend=paddle
+[c4.axis_ocr] paddle_import=ok
+[c4.axis_ocr] ocr_method=ocr()
+[c4.axis_ocr] summary raw_detections=86 merged_ticks=12 avg_conf=0.9997

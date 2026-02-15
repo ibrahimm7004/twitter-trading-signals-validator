@@ -1,0 +1,50 @@
+{
+  "chart_frame": {
+    "plot_bbox": [
+      11.0,
+      72.0,
+      1439.0,
+      685.0
+    ],
+    "axis_bbox": [
+      1439.0,
+      72.0,
+      1599.0,
+      684.0
+    ],
+    "scale": "unknown",
+    "confidence": 0.8
+  },
+  "axis_ticks": [],
+  "elements": [],
+  "scenario": {
+    "movement_type": "unknown",
+    "patterns": [],
+    "waypoints": [],
+    "confidence": 0.0
+  },
+  "abstain": true,
+  "abstain_reasons": [
+    {
+      "code": "OCR_NOT_IMPLEMENTED",
+      "stage": "axis_ocr",
+      "message": "PaddleOCR failed to run.",
+      "details": {
+        "error": "(Unimplemented) ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]  (at ..\\paddle\\fluid\\framework\\new_executor\\instruction\\onednn\\onednn_instruction.cc:118)\n"
+      }
+    },
+    {
+      "code": "CALIBRATION_FAILED",
+      "stage": "calibration",
+      "message": "Insufficient ticks for calibration.",
+      "details": {
+        "min_ticks": 6,
+        "observed": 0
+      }
+    }
+  ],
+  "debug_artifacts": {
+    "overlay_path": "tmp\\debug\\overlay.png",
+    "axis_debug_path": "tmp\\debug\\axis_debug.png"
+  }
+}

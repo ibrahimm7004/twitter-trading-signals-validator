@@ -1,0 +1,4 @@
+[c4.axis_ocr] backend=disabled
+[c4.axis_ocr] paddle_import=skipped
+[c4.axis_ocr] ocr_method=none
+[c4.axis_ocr] summary raw_detections=0 merged_ticks=0 avg_conf=0.0000

@@ -1,0 +1,32 @@
+{
+  "chart_frame": {
+    "plot_bbox": [0, 0, 0, 0],
+    "axis_bbox": [0, 0, 0, 0],
+    "scale": "unknown",
+    "confidence": 0.0
+  },
+  "axis_ticks": [],
+  "elements": [],
+  "scenario": {
+    "movement_type": "unknown",
+    "patterns": [],
+    "waypoints": [],
+    "confidence": 0.0
+  },
+  "abstain": true,
+  "abstain_reasons": [
+    {
+      "code": "FRAME_NOT_IMPLEMENTED",
+      "stage": "frame",
+      "message": "Frame localization stub (M1).",
+      "details": {
+        "milestone": "M1",
+        "next": "M2"
+      }
+    }
+  ],
+  "debug_artifacts": {
+    "overlay_path": null,
+    "axis_debug_path": null
+  }
+}

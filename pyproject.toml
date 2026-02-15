@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "c4"
+version = "0.1.0"
+description = "Component 4 extraction pipeline (M1 scaffold)"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Component4"}]
+license = {text = "MIT"}
+dependencies = [
+  "numpy>=1.24",
+  "opencv-python>=4.8",
+  "pydantic>=2.5,<3",
+  "PyYAML>=6.0",
+  "typer>=0.9",
+  "Pillow>=10.0",
+]
+
+[project.scripts]
+c4 = "c4.cli:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

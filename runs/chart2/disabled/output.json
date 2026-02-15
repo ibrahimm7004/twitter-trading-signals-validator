@@ -1,0 +1,50 @@
+{
+  "chart_frame": {
+    "plot_bbox": [
+      0.0,
+      0.0,
+      1123.0,
+      814.0
+    ],
+    "axis_bbox": [
+      1123.0,
+      30.0,
+      1199.0,
+      710.0
+    ],
+    "scale": "unknown",
+    "confidence": 1.0
+  },
+  "axis_ticks": [],
+  "elements": [],
+  "scenario": {
+    "movement_type": "unknown",
+    "patterns": [],
+    "waypoints": [],
+    "confidence": 0.0
+  },
+  "abstain": true,
+  "abstain_reasons": [
+    {
+      "code": "OCR_NOT_IMPLEMENTED",
+      "stage": "axis_ocr",
+      "message": "OCR backend disabled.",
+      "details": {
+        "reason": "OCR_DISABLED"
+      }
+    },
+    {
+      "code": "CALIBRATION_FAILED",
+      "stage": "calibration",
+      "message": "Insufficient ticks for calibration.",
+      "details": {
+        "min_ticks": 6,
+        "observed": 0
+      }
+    }
+  ],
+  "debug_artifacts": {
+    "overlay_path": "runs\\chart2\\disabled\\overlay.png",
+    "axis_debug_path": "runs\\chart2\\disabled\\axis_debug.png"
+  }
+}
