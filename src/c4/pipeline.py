@@ -11,7 +11,7 @@ import cv2
 
 from .debug.draw import draw_boxes_with_labels
 from .schema import OutputSchema, empty_output
-from .stages import axis_ocr, calibration, candles_detect, elements_detect, frame, scenario_reconstruct
+from .stages import axis_ocr, calibration, candles_detect, elements_detect, frame, scenario_reconstruct, signal_build
 from .types import AbstainReason, StageResult
 
 
@@ -61,7 +61,13 @@ def run_pipeline(image_path: str | Path, config: C4Config, debug_dir: str | Path
             elements=stage_elements.data or [],
             config=config,
             current_x_px=stage_candles.data,
+            axis_ticks=stage_axis.data,
         )
+    stage_signal: StageResult = signal_build.run(
+        scenario=stage_scenario.data if stage_scenario.data is not None else None,
+        elements=stage_elements.data or [],
+        scenario_debug=stage_scenario.debug if isinstance(stage_scenario.debug, dict) else None,
+    )
 
     if stage_frame.data is not None:
         output.chart_frame = stage_frame.data
@@ -71,10 +77,12 @@ def run_pipeline(image_path: str | Path, config: C4Config, debug_dir: str | Path
         output.elements = stage_elements.data
     if stage_scenario.data is not None:
         output.scenario = stage_scenario.data
+    if stage_signal.data is not None:
+        output.signal = stage_signal.data
 
-    output.abstain_reasons = _collect_reasons([stage_frame, stage_axis, stage_calib, stage_elements, stage_scenario])
+    output.abstain_reasons = _collect_reasons([stage_frame, stage_axis, stage_calib, stage_elements, stage_scenario, stage_signal])
     output.abstain = any(
-        stage.abstain for stage in [stage_frame, stage_axis, stage_calib, stage_elements, stage_scenario]
+        stage.abstain for stage in [stage_frame, stage_axis, stage_calib, stage_elements, stage_scenario, stage_signal]
     ) or (
         len(output.abstain_reasons) > 0
     )

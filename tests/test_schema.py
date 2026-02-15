@@ -18,6 +18,7 @@ def test_output_schema_keys():
         "axis_ticks",
         "elements",
         "scenario",
+        "signal",
         "abstain",
         "abstain_reasons",
         "debug_artifacts",

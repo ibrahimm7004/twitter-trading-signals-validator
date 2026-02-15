@@ -100,6 +100,17 @@ class Scenario(BaseModel):
     confidence: float
 
 
+class Signal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    direction: Literal["long", "short", "unknown"]
+    entry: Optional[float] = None
+    stop: Optional[float] = None
+    targets: list[float] = Field(default_factory=list)
+    rationale: list[str] = Field(default_factory=list)
+    confidence: float
+
+
 class DebugArtifacts(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -114,6 +125,7 @@ class OutputSchema(BaseModel):
     axis_ticks: list[AxisTick]
     elements: list[ChartElement]
     scenario: Scenario
+    signal: Signal
     abstain: bool
     abstain_reasons: list[AbstainReason]
     debug_artifacts: DebugArtifacts
@@ -128,12 +140,14 @@ def empty_output() -> OutputSchema:
         confidence=0.0,
     )
     scenario = Scenario(movement_type="unknown", patterns=[], waypoints=[], confidence=0.0)
+    signal = Signal(direction="unknown", entry=None, stop=None, targets=[], rationale=[], confidence=0.0)
     debug_artifacts = DebugArtifacts(overlay_path=None, axis_debug_path=None)
     return OutputSchema(
         chart_frame=chart_frame,
         axis_ticks=[],
         elements=[],
         scenario=scenario,
+        signal=signal,
         abstain=True,
         abstain_reasons=[],
         debug_artifacts=debug_artifacts,

@@ -222,18 +222,18 @@
     }
   ],
   "scenario": {
-    "movement_type": "unknown",
+    "movement_type": "direct",
     "patterns": [],
     "waypoints": [
       {
         "label": "current",
-        "price": 182.327868852459,
+        "price": 185.54098360655738,
         "time_hint": null,
-        "conf": 0.6
+        "conf": 0.65
       },
       {
         "label": "zone",
-        "price": 50.59016393442624,
+        "price": 151.0,
         "time_hint": "low",
         "conf": 0.72
       },
@@ -242,9 +242,30 @@
         "price": 990.3225806451613,
         "time_hint": "high",
         "conf": 0.72
+      },
+      {
+        "label": "target",
+        "price": 151.0,
+        "time_hint": null,
+        "conf": 0.5
       }
     ],
-    "confidence": 0.68
+    "confidence": 0.6475
+  },
+  "signal": {
+    "direction": "short",
+    "entry": null,
+    "stop": 990.3225806451613,
+    "targets": [
+      151.0
+    ],
+    "rationale": [
+      "movement:direct",
+      "target_from_scenario_or_zone",
+      "stop_from_zone",
+      "bounds:axis_ticks"
+    ],
+    "confidence": 0.6975
   },
   "abstain": false,
   "abstain_reasons": [],

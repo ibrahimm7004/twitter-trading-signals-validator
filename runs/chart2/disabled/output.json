@@ -23,6 +23,16 @@
     "waypoints": [],
     "confidence": 0.0
   },
+  "signal": {
+    "direction": "unknown",
+    "entry": null,
+    "stop": null,
+    "targets": [],
+    "rationale": [
+      "bounds:none"
+    ],
+    "confidence": 0.0
+  },
   "abstain": true,
   "abstain_reasons": [
     {
