@@ -118,6 +118,14 @@ class DebugArtifacts(BaseModel):
     axis_debug_path: Optional[str] = None
 
 
+class QualityFlags(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    likely_faulty_input: bool = False
+    reasons: list[str] = Field(default_factory=list)
+    metrics: dict[str, float | int | bool | None] = Field(default_factory=dict)
+
+
 class OutputSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -129,6 +137,7 @@ class OutputSchema(BaseModel):
     abstain: bool
     abstain_reasons: list[AbstainReason]
     debug_artifacts: DebugArtifacts
+    quality_flags: QualityFlags | None = None
 
 
 def empty_output() -> OutputSchema:
@@ -151,4 +160,5 @@ def empty_output() -> OutputSchema:
         abstain=True,
         abstain_reasons=[],
         debug_artifacts=debug_artifacts,
+        quality_flags=None,
     )

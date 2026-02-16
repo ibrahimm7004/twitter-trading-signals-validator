@@ -392,6 +392,9 @@ def evaluate_one(image_path: Path, image_id: str, cfg: Any, ctx: EvalContext) ->
     axis_values = [float(t.value) for t in validated.axis_ticks]
     price_min = min(axis_values) if axis_values else None
     price_max = max(axis_values) if axis_values else None
+    quality_flags_payload = validated.quality_flags.model_dump() if validated.quality_flags is not None else None
+    likely_faulty_input = bool(validated.quality_flags.likely_faulty_input) if validated.quality_flags is not None else False
+    quality_flag_reasons = list(validated.quality_flags.reasons) if validated.quality_flags is not None else []
     tick_monotonicity = evaluate_axis_tick_monotonicity(validated.axis_ticks)
     visual_artifacts = evaluate_visual_artifacts(artifacts_dir)
     visual_missing_files = list(visual_artifacts.missing_files)
@@ -410,6 +413,9 @@ def evaluate_one(image_path: Path, image_id: str, cfg: Any, ctx: EvalContext) ->
         "axis_bbox_in_bounds": bbox_in_bounds(validated.chart_frame.axis_bbox, width, height),
         "ticks_monotonic": tick_monotonicity.passed,
         "ticks_monotonic_details": tick_monotonicity.to_dict(),
+        "likely_faulty_input": likely_faulty_input,
+        "quality_flag_reasons": quality_flag_reasons,
+        "quality_flags": quality_flags_payload,
         "vis_artifacts_missing_files": visual_missing_files,
         "scenario_waypoints_in_bounds": (
             all(in_bounds(w.price, price_min, price_max) is not False for w in scenario.waypoints)
@@ -469,6 +475,16 @@ def evaluate_one(image_path: Path, image_id: str, cfg: Any, ctx: EvalContext) ->
         issues.append(Issue("error", "NO_AXIS_TICKS", "No axis ticks extracted.", [rel_out or "", rel_elements_debug or rel_out or ""]))
     elif metrics["axis_ticks_count"] < 4:
         issues.append(Issue("warn", "NO_AXIS_TICKS", "Axis tick count is below 4.", [rel_out or ""]))
+    if likely_faulty_input:
+        reasons_joined = ", ".join(quality_flag_reasons) if quality_flag_reasons else "unspecified"
+        issues.append(
+            Issue(
+                "info",
+                "INPUT_GEOMETRY_SUSPECT",
+                f"Input geometry likely faulty/non-calibratable ({reasons_joined}).",
+                [rel_out or ""],
+            )
+        )
     if checks["plot_bbox_in_bounds"] is False or checks["axis_bbox_in_bounds"] is False:
         issues.append(Issue("error", "BBOX_OUT_OF_BOUNDS", "Frame bboxes are out of image bounds.", [rel_out or ""]))
     if tick_monotonicity.passed is False:

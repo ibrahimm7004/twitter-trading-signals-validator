@@ -22,6 +22,7 @@ def test_output_schema_keys():
         "abstain",
         "abstain_reasons",
         "debug_artifacts",
+        "quality_flags",
     }
 
 
