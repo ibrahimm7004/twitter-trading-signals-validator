@@ -32,6 +32,7 @@ htmlcov/
 
 # Project-generated outputs/artifacts
 runs/
+runs_eval/
 tmp/
 reports/
 

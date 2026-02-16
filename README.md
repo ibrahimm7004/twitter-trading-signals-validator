@@ -36,6 +36,28 @@ Per-image outputs:
 - `runs/_out/<image_stem>/output.json`
 - `runs/_debug/<image_stem>/...` debug PNG artifacts
 
+## Evaluation suite rerun (Windows-friendly)
+Run the formal suite over `test-images` with one command. Each execution creates a fresh timestamped folder:
+
+```bash
+python scripts/eval_c4_suite.py
+```
+
+Outputs are written under:
+- `runs_eval/run_<YYYYMMDD_HHMMSS>/suite_summary.{md,json,csv}`
+- `runs_eval/run_<...>/flagged/by_issue_code.{md,json}`
+- `runs_eval/run_<...>/determinism/comparisons.{md,json}`
+- `runs_eval/run_<...>/images/<stem>/artifacts` and `eval`
+
+Latest run pointer:
+- `runs_eval/latest.txt`
+
+Custom run name:
+
+```bash
+python scripts/eval_c4_suite.py --run-name run_after_determinism_fix
+```
+
 ## Output schema (top-level)
 - `chart_frame`
 - `axis_ticks`

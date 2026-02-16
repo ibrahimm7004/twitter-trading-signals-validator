@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import inspect
 import os
 from pathlib import Path
 import re
+import statistics
 import tempfile
-from typing import Iterable
+from typing import Any, Callable, Iterable
 
 import cv2
 import numpy as np
@@ -27,18 +29,77 @@ class OCRDetection:
     text: str
 
 
-_NUM_RE = re.compile(r"[-+]?\d[\d,]*\.?\d*")
+_NUM_RE = re.compile(r"(?P<num>[-+]?(?:\d[\d,]*\.?\d*|\.\d+))(?P<suffix>[kKmMbBtT])?")
+_SUFFIX_MULTIPLIERS = {
+    "K": 1_000,
+    "M": 1_000_000,
+    "B": 1_000_000_000,
+    "T": 1_000_000_000_000,
+}
+class _OCRCache(dict[str, object]):
+    def clear(self) -> None:  # pragma: no cover - test helper behavior
+        super().clear()
+        _get_paddle_ocr.cache_clear()
+
+
+_OCR_CACHE: _OCRCache = _OCRCache()
+_PADDLE_CACHE_HIT_LOGGED = False
+
+
+def _set_paddle_env_defaults() -> None:
+    # Paddle/PaddleX can be unstable on some CPU builds; set safe defaults.
+    os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+    os.environ.setdefault("DISABLE_AUTO_LOGGING_CONFIG", "1")
+    os.environ.setdefault("PADDLE_DISABLE_ONEDNN", "1")
+    os.environ.setdefault("FLAGS_use_mkldnn", "0")
+    os.environ.setdefault("FLAGS_enable_mkldnn", "0")
+    os.environ.setdefault("FLAGS_enable_onednn", "0")
+    os.environ.setdefault("FLAGS_enable_pir_api", "0")
+
+
+def _build_paddle_ocr() -> object:
+    from paddleocr import PaddleOCR
+
+    kwargs = {"use_angle_cls": False, "lang": "en"}
+    try:
+        sig = inspect.signature(PaddleOCR.__init__)
+        if "show_log" in sig.parameters:
+            kwargs["show_log"] = False
+    except (TypeError, ValueError):
+        pass
+    try:
+        return PaddleOCR(**kwargs)
+    except Exception:
+        return PaddleOCR(use_angle_cls=False, lang="en")
+
+
+@lru_cache(maxsize=1)
+def _get_paddle_ocr() -> object:
+    _set_paddle_env_defaults()
+    return _build_paddle_ocr()
+
+
+def _get_or_create_paddle_ocr(config: C4Config) -> object:
+    del config  # reserved for future backend keying/config-dependent options
+    ocr = _get_paddle_ocr()
+    _OCR_CACHE["paddle"] = ocr
+    return ocr
 
 
 def _parse_number(text: str) -> float | None:
-    match = _NUM_RE.search(text.replace(" ", ""))
-    if not match:
+    matched = _NUM_RE.search(text.replace(" ", ""))
+    if not matched:
         return None
-    raw = match.group(0).replace(",", "")
+    raw = matched.group("num").replace(",", "")
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
         return None
+    suffix = matched.group("suffix")
+    if suffix:
+        multiplier = _SUFFIX_MULTIPLIERS.get(suffix.upper(), 1)
+        value *= multiplier
+    return value
 
 
 def _verbose(config: C4Config) -> bool:
@@ -51,12 +112,17 @@ def _verbose(config: C4Config) -> bool:
 def _extract_paddle_detections(
     results: object,
     *,
-    vlog: callable | None = None,
+    verbose: bool = False,
+    vlog: Callable[[str], None] | None = None,
     meta: dict | None = None,
 ) -> list[dict[str, object]]:
     """Normalize PaddleOCR/PaddleX outputs into dicts with bbox/text/conf."""
     if vlog is None:
         vlog = lambda _msg: None
+
+    def _vlog_lazy(factory: Callable[[], str]) -> None:
+        if verbose:
+            vlog(factory())
 
     def _poly_to_bbox(poly: object) -> tuple[int, int, int, int] | None:
         if isinstance(poly, np.ndarray):
@@ -210,22 +276,22 @@ def _extract_paddle_detections(
 
     if meta is not None:
         meta["chosen_texts_preview"] = [repr(t) for t in chosen_texts[:5]]
-    vlog(
-        f"[c4.axis_ocr] candidate_dt_poly_parents={len(candidate_dicts)} "
+    _vlog_lazy(
+        lambda: f"[c4.axis_ocr] candidate_dt_poly_parents={len(candidate_dicts)} "
         f"chosen_keys={chosen_keys}"
     )
-    vlog(f"[c4.axis_ocr] chosen_texts_preview={[repr(t) for t in chosen_texts[:5]]}")
-    vlog(
-        f"[c4.axis_ocr] chosen_text_types="
+    _vlog_lazy(lambda: f"[c4.axis_ocr] chosen_texts_preview={[repr(t) for t in chosen_texts[:5]]}")
+    _vlog_lazy(
+        lambda: f"[c4.axis_ocr] chosen_text_types="
         f"{[type(x).__name__ for x in chosen_raw_text_items[:5]]}"
     )
 
     if chosen_dt_polys:
         first_poly = chosen_dt_polys[0]
-        vlog(f"[c4.axis_ocr] dt_poly0_type={type(first_poly).__name__}")
+        _vlog_lazy(lambda: f"[c4.axis_ocr] dt_poly0_type={type(first_poly).__name__}")
         if isinstance(first_poly, np.ndarray):
-            vlog(f"[c4.axis_ocr] dt_poly0_shape={first_poly.shape}")
-        vlog(f"[c4.axis_ocr] dt_poly0_preview={repr(first_poly)[:200]}")
+            _vlog_lazy(lambda: f"[c4.axis_ocr] dt_poly0_shape={first_poly.shape}")
+        _vlog_lazy(lambda: f"[c4.axis_ocr] dt_poly0_preview={repr(first_poly)[:200]}")
         extracted_dt_polys = len(chosen_dt_polys)
         extracted_rec_texts = len(chosen_texts)
         pair_count = min(len(chosen_dt_polys), len(chosen_texts))
@@ -254,13 +320,16 @@ def _extract_paddle_detections(
 
     if meta is not None:
         meta["norm_len"] = len(normalized)
-    vlog(
-        f"[c4.axis_ocr] extracted_dt_polys={extracted_dt_polys} "
+    _vlog_lazy(
+        lambda: f"[c4.axis_ocr] extracted_dt_polys={extracted_dt_polys} "
         f"extracted_rec_texts={extracted_rec_texts}"
     )
-    vlog(f"[c4.axis_ocr] norm_len={len(normalized)} norm_text_preview={[repr(d['text']) for d in normalized[:5]]}")
-    vlog(f"[c4.axis_ocr] extracted_texts_preview={[repr(x) for x in extracted_texts[:5]]}")
-    vlog(f"[c4.axis_ocr] rec_text_types_preview={rec_text_types[:5]}")
+    _vlog_lazy(
+        lambda: f"[c4.axis_ocr] norm_len={len(normalized)} "
+        f"norm_text_preview={[repr(d['text']) for d in normalized[:5]]}"
+    )
+    _vlog_lazy(lambda: f"[c4.axis_ocr] extracted_texts_preview={[repr(x) for x in extracted_texts[:5]]}")
+    _vlog_lazy(lambda: f"[c4.axis_ocr] rec_text_types_preview={rec_text_types[:5]}")
     return normalized
 
 
@@ -310,6 +379,331 @@ def _merge_by_y(detections: list[OCRDetection], tol: int) -> list[OCRDetection]:
     return merged
 
 
+_CLEAN_ATTEMPTS: list[tuple[float, int, float | None] | None] = [
+    (0.03, 6, 0.65),
+    (0.08, 6, 0.9),
+    (0.10, 6, None),
+    None,
+]
+_RELAXED_CLEAN_ATTEMPTS = _CLEAN_ATTEMPTS[1:]
+
+
+def _filter_candidates_by_bbox(
+    parsed_ticks: Iterable[dict[str, Any]],
+    crop_w: int,
+    *,
+    right_frac: float = 0.03,
+    min_px: int = 6,
+    width_frac: float | None = 0.65,
+) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    if crop_w <= 0:
+        return filtered
+    right_limit = max(min_px, int(right_frac * crop_w))
+    width_limit = int(width_frac * crop_w) if width_frac is not None else None
+    for tick in parsed_ticks:
+        bbox = tick.get("bbox")
+        if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
+            continue
+        x0, _, x1, _ = bbox
+        width = x1 - x0
+        if crop_w - x1 > right_limit:
+            continue
+        if width_limit is not None and width > width_limit:
+            continue
+        filtered.append(dict(tick))
+    return filtered
+
+
+def _cluster_ticks_by_y(ticks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not ticks:
+        return []
+    sorted_ticks = sorted(ticks, key=lambda tick: float(tick.get("y_px", 0.0)))
+    gaps: list[float] = []
+    for index in range(1, len(sorted_ticks)):
+        gap = sorted_ticks[index]["y_px"] - sorted_ticks[index - 1]["y_px"]
+        if gap > 0:
+            gaps.append(gap)
+    med_gap = statistics.median(gaps) if gaps else 0.0
+    threshold = max(15.0, 2.5 * med_gap) if med_gap > 0 else 15.0
+    clusters: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    for tick in sorted_ticks:
+        if not current:
+            current = [tick]
+            clusters.append(current)
+            continue
+        prev_tick = current[-1]
+        gap = tick["y_px"] - prev_tick["y_px"]
+        if gap > threshold:
+            current = [tick]
+            clusters.append(current)
+        else:
+            current.append(tick)
+    best = max(clusters, key=lambda cluster: (len(cluster), cluster[-1]["y_px"] - cluster[0]["y_px"]))
+    return best
+
+
+def _determine_direction(values: list[float]) -> str:
+    if len(values) < 2:
+        return "inc"
+    pos = 0
+    neg = 0
+    for i in range(len(values) - 1):
+        diff = values[i + 1] - values[i]
+        if diff > 0:
+            pos += 1
+        if diff < 0:
+            neg += 1
+    return "inc" if pos >= neg else "dec"
+
+
+def _monotonic_check_pair(
+    prev: float | None,
+    curr: float | None,
+    direction: str,
+    epsilon: float,
+) -> bool:
+    if direction == "inc":
+        if prev is None or curr is None:
+            return True
+        return curr + epsilon >= prev
+    if prev is None or curr is None:
+        return True
+    return curr <= prev + epsilon
+
+
+def _longest_monotonic_subsequence(values: list[float], direction: str, epsilon: float) -> list[int]:
+    n = len(values)
+    if n == 0:
+        return []
+    dp = [1] * n
+    prev_index = [-1] * n
+    best_idx = 0
+    for i in range(n):
+        for j in range(i):
+            if _monotonic_check_pair(values[j], values[i], direction, epsilon) and dp[j] + 1 > dp[i]:
+                dp[i] = dp[j] + 1
+                prev_index[i] = j
+        if dp[i] > dp[best_idx]:
+            best_idx = i
+    sequence: list[int] = []
+    while best_idx != -1:
+        sequence.append(best_idx)
+        best_idx = prev_index[best_idx]
+    sequence.reverse()
+    return sequence
+
+
+def _compute_epsilon(values: list[float]) -> float:
+    if not values:
+        return 1e-9
+    value_range = max(values) - min(values)
+    return max(1e-9, 0.001 * value_range) if value_range > 0 else 1e-9
+
+
+def _rescue_decimal(
+    value: float,
+    median_abs: float,
+    direction: str,
+    prev_value: float | None,
+    next_value: float | None,
+    epsilon: float,
+) -> float | None:
+    if median_abs <= 0:
+        return None
+    abs_value = abs(value)
+    if abs_value <= 1:
+        return None
+    nearest = int(round(value))
+    if abs(value - nearest) >= 1e-6 or nearest % 10 != 0:
+        return None
+    best_candidate = None
+    best_diff = float("inf")
+    for k in range(1, 7):
+        candidate = value / (10 ** k)
+        abs_candidate = abs(candidate)
+        if abs_candidate == 0:
+            continue
+        if not (median_abs / 5 <= abs_candidate <= median_abs * 5):
+            continue
+        if not _monotonic_check_pair(prev_value, candidate, direction, epsilon):
+            continue
+        if not _monotonic_check_pair(candidate, next_value, direction, epsilon):
+            continue
+        diff = abs(abs_candidate - median_abs)
+        if diff < best_diff:
+            best_diff = diff
+            best_candidate = candidate
+    return best_candidate
+
+def _clean_numeric_cluster(
+    cluster: list[dict[str, Any]],
+    median_abs: float,
+    direction: str,
+    epsilon: float,
+) -> tuple[list[dict[str, Any]], list[float]]:
+    cleaned_ticks: list[dict[str, Any]] = []
+    cleaned_values: list[float] = []
+    for index, tick in enumerate(cluster):
+        tick_value = float(tick["value"])
+        abs_value = abs(tick_value)
+        if median_abs > 10 and abs_value < median_abs * 0.05:
+            continue
+        next_value = (
+            float(cluster[index + 1]["value"])
+            if index + 1 < len(cluster)
+            else None
+        )
+        candidate = tick_value
+        if median_abs > 0 and abs_value > median_abs * 20 and abs_value > 1:
+            rescue = _rescue_decimal(tick_value, median_abs, direction, None, next_value, epsilon)
+            if rescue is None:
+                continue
+            candidate = rescue
+        cleaned_tick = dict(tick)
+        cleaned_tick["value"] = float(candidate)
+        cleaned_ticks.append(cleaned_tick)
+        cleaned_values.append(float(candidate))
+    return cleaned_ticks, cleaned_values
+
+
+def _run_cleaning_attempt(
+    candidates: list[dict[str, Any]],
+    crop_w: int,
+    min_ticks: int,
+) -> list[dict[str, Any]] | None:
+    if not candidates:
+        return None
+    clustered = _cluster_ticks_by_y(candidates)
+    if not clustered:
+        return None
+    raw_values = [float(tick["value"]) for tick in clustered]
+    direction = _determine_direction(raw_values)
+    epsilon = _compute_epsilon(raw_values)
+    values_for_median = [abs(val) for val in raw_values if abs(val) > 0]
+    median_abs = float(statistics.median(values_for_median)) if values_for_median else 0.0
+    cleaned_ticks, cleaned_values = _clean_numeric_cluster(clustered, median_abs, direction, epsilon)
+    if not cleaned_ticks:
+        return None
+    sequence = _longest_monotonic_subsequence(cleaned_values, direction, epsilon)
+    if len(sequence) >= min_ticks:
+        return [cleaned_ticks[idx] for idx in sequence]
+    return cleaned_ticks
+
+
+def _apply_attempts(
+    candidates0: list[dict[str, Any]],
+    crop_w: int,
+    min_ticks: int,
+    attempts: list[tuple[float, int, float | None] | None],
+) -> list[dict[str, Any]]:
+    best_fallback: list[dict[str, Any]] = []
+    best_len = 0
+    for params in attempts:
+        if params is None:
+            filtered = [dict(tick) for tick in candidates0]
+        else:
+            right_frac, min_px, width_frac = params
+            filtered = _filter_candidates_by_bbox(
+                candidates0,
+                crop_w,
+                right_frac=right_frac,
+                min_px=min_px,
+                width_frac=width_frac,
+            )
+        result = _run_cleaning_attempt(filtered, crop_w, min_ticks) if filtered else None
+        if result is None:
+            continue
+        if len(result) >= min_ticks:
+            return result
+        if len(result) > best_len:
+            best_len = len(result)
+            best_fallback = result
+    if best_fallback:
+        return best_fallback
+    return [dict(tick) for tick in candidates0]
+
+
+def _choose_final_ticks(
+    primary: list[dict[str, Any]],
+    fallback: list[dict[str, Any]],
+    min_ticks: int,
+) -> list[dict[str, Any]]:
+    if len(primary) >= min_ticks:
+        return primary
+    if len(fallback) >= min_ticks:
+        return fallback
+    return primary
+
+
+def clean_axis_ticks(
+    parsed_ticks: Iterable[dict[str, Any]],
+    crop_w: int,
+    min_ticks: int = 4,
+    *,
+    attempt_sequence: list[tuple[float, int, float | None] | None] | None = None,
+) -> list[dict[str, Any]]:
+    candidates0 = [dict(tick) for tick in parsed_ticks]
+    if not candidates0:
+        return []
+    attempts = attempt_sequence if attempt_sequence is not None else _CLEAN_ATTEMPTS
+    return _apply_attempts(candidates0, crop_w, min_ticks, attempts)
+
+
+def _compute_vertical_roi_bounds(
+    frame_h: int,
+    axis_y0: int,
+    axis_y1: int,
+    plot_bbox: list[float] | None,
+) -> tuple[int, int]:
+    plot_y0 = axis_y0
+    plot_y1 = axis_y1
+    if plot_bbox and len(plot_bbox) == 4:
+        _, py0, _, py1 = plot_bbox
+        plot_y0 = max(plot_y0, int(round(py0)))
+        plot_y1 = min(plot_y1, int(round(py1)))
+    plot_height = max(plot_y1 - plot_y0, 0)
+    fallback_threshold = max(350, int(round(0.35 * frame_h)))
+    if plot_height < fallback_threshold:
+        y0 = max(0, int(round(0.08 * frame_h)))
+        y1 = min(frame_h, int(round(0.92 * frame_h)))
+    else:
+        y0 = max(axis_y0, plot_y0)
+        y1 = min(axis_y1, plot_y1)
+    if y1 <= y0:
+        y0 = axis_y0
+        y1 = axis_y1
+    return y0, y1
+
+
+def _preprocess_for_retry(crop: np.ndarray) -> np.ndarray:
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    scaled = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(scaled)
+    _, thresh = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
+
+
+def _choose_best_roi(
+    crop_a: np.ndarray | None,
+    detections_a: list[OCRDetection],
+    debug_a: list[dict[str, object]],
+    crop_b: np.ndarray | None,
+    detections_b: list[OCRDetection],
+    debug_b: list[dict[str, object]],
+) -> tuple[np.ndarray, list[OCRDetection], list[dict[str, object]], str]:
+    if crop_b is None:
+        assert crop_a is not None
+        return crop_a, detections_a, debug_a, "axis"
+    if crop_a is None:
+        return crop_b, detections_b, debug_b, "plot"
+    if len(detections_b) > len(detections_a):
+        return crop_b, detections_b, debug_b, "plot"
+    return crop_a, detections_a, debug_a, "axis"
+
+
 def _ocr_disabled_reason(message: str) -> AbstainReason:
     return AbstainReason(
         code=ReasonCode.OCR_NOT_IMPLEMENTED,
@@ -323,6 +717,8 @@ def run(
     image_path: str | Path,
     axis_bbox: list[float] | None,
     config: C4Config,
+    plot_bbox: list[float] | None = None,
+    ocr_instance: object | None = None,
 ) -> StageResult[list[AxisTick]]:
     verbose = _verbose(config)
     _vlog = print if verbose else (lambda _msg: None)
@@ -348,29 +744,32 @@ def run(
         return StageResult(data=[], confidence=0.0, abstain=True, reasons=[reason], debug=debug)
 
     print("[c4.axis_ocr] backend=paddle")
-
-    # Paddle/PaddleX can be unstable on some CPU builds; set safe defaults.
-    os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
-    os.environ.setdefault("DISABLE_AUTO_LOGGING_CONFIG", "1")
-    os.environ.setdefault("PADDLE_DISABLE_ONEDNN", "1")
-    os.environ.setdefault("FLAGS_use_mkldnn", "0")
-    os.environ.setdefault("FLAGS_enable_mkldnn", "0")
-    os.environ.setdefault("FLAGS_enable_onednn", "0")
-    os.environ.setdefault("FLAGS_enable_pir_api", "0")
-    try:
-        from paddleocr import PaddleOCR
-    except Exception:
-        print("[c4.axis_ocr] paddle_import=failed")
-        print("[c4.axis_ocr] ocr_method=none")
-        print(
-            "[c4.axis_ocr] summary raw_detections="
-            f"{debug['raw_detections_count']} merged_ticks={debug['merged_ticks_count']} "
-            f"avg_conf={debug['avg_conf']:.4f}"
-        )
-        reason = _ocr_disabled_reason("PaddleOCR not available.")
-        return StageResult(data=[], confidence=0.0, abstain=True, reasons=[reason], debug=debug)
-    debug["ocr_import_ok"] = True
-    print("[c4.axis_ocr] paddle_import=ok")
+    global _PADDLE_CACHE_HIT_LOGGED
+    if ocr_instance is not None:
+        ocr = ocr_instance
+        debug["ocr_import_ok"] = True
+        debug["paddle_ocr_cached"] = True
+        print("[c4.axis_ocr] paddle_import=ok")
+    else:
+        cached_before = _get_paddle_ocr.cache_info().currsize > 0
+        try:
+            ocr = _get_or_create_paddle_ocr(config)
+        except Exception:
+            print("[c4.axis_ocr] paddle_import=failed")
+            print("[c4.axis_ocr] ocr_method=none")
+            print(
+                "[c4.axis_ocr] summary raw_detections="
+                f"{debug['raw_detections_count']} merged_ticks={debug['merged_ticks_count']} "
+                f"avg_conf={debug['avg_conf']:.4f}"
+            )
+            reason = _ocr_disabled_reason("PaddleOCR not available.")
+            return StageResult(data=[], confidence=0.0, abstain=True, reasons=[reason], debug=debug)
+        debug["ocr_import_ok"] = True
+        debug["paddle_ocr_cached"] = cached_before
+        print("[c4.axis_ocr] paddle_import=ok")
+        if cached_before and not _PADDLE_CACHE_HIT_LOGGED:
+            print("[c4.axis_ocr] paddle_ocr_cached=True")
+            _PADDLE_CACHE_HIT_LOGGED = True
 
     image = cv2.imread(str(image_path))
     if image is None:
@@ -392,8 +791,8 @@ def run(
         return StageResult(data=[], confidence=0.0, abstain=True, reasons=[reason], debug={})
 
     h, w = image.shape[:2]
-    x0, y0, x1, y1 = _clip_bbox(axis_bbox, w, h)
-    if x1 <= x0 or y1 <= y0:
+    axis_x0, axis_y0, axis_x1, axis_y1 = _clip_bbox(axis_bbox, w, h)
+    if axis_x1 <= axis_x0 or axis_y1 <= axis_y0:
         reason = AbstainReason(
             code=ReasonCode.AXIS_OCR_INSUFFICIENT_TICKS,
             stage="axis_ocr",
@@ -401,19 +800,27 @@ def run(
             details={"axis_bbox": axis_bbox},
         )
         return StageResult(data=[], confidence=0.0, abstain=True, reasons=[reason], debug={})
-
-    axis_crop = image[y0:y1, x0:x1].copy()
-    try:
-        kwargs = {"use_angle_cls": False, "lang": "en"}
-        try:
-            sig = inspect.signature(PaddleOCR.__init__)
-            if "show_log" in sig.parameters:
-                kwargs["show_log"] = False
-        except (TypeError, ValueError):
-            pass
-        ocr = PaddleOCR(**kwargs)
-    except Exception:
-        ocr = PaddleOCR(use_angle_cls=False, lang="en")
+    plot_y0 = axis_y0
+    plot_y1 = axis_y1
+    desired_width: int | None = None
+    if plot_bbox and len(plot_bbox) == 4:
+        px0, py0, px1, py1 = _clip_bbox(plot_bbox, w, h)
+        plot_y0 = max(plot_y0, py0)
+        plot_y1 = min(plot_y1, py1)
+        plot_width = max(px1 - px0, 1)
+        desired_width = min(max(int(round(plot_width * 0.18)), 120), 260)
+    crop_y0 = max(axis_y0, plot_y0)
+    crop_y1 = min(axis_y1, plot_y1)
+    if crop_y1 <= crop_y0:
+        crop_y0, crop_y1 = axis_y0, axis_y1
+    crop_x1 = axis_x1
+    if desired_width is not None:
+        crop_x0 = min(axis_x0, max(0, axis_x1 - desired_width))
+    else:
+        crop_x0 = axis_x0
+    if crop_x1 <= crop_x0:
+        crop_x0, crop_x1 = axis_x0, axis_x1
+    axis_crop = image[crop_y0:crop_y1, crop_x0:crop_x1].copy()
 
     detections: list[OCRDetection] = []
     debug_boxes_raw: list[dict] = []
@@ -427,13 +834,15 @@ def run(
         return False
 
     def _log_results(results: object) -> None:
+        if not verbose:
+            return
         _vlog(f"[c4.axis_ocr] ocr_results_type={type(results)}")
         if isinstance(results, list):
             _vlog(f"[c4.axis_ocr] ocr_results_len={len(results)}")
         _vlog(f"[c4.axis_ocr] ocr_results_preview={repr(results)[:300]}")
 
     def _has_usable_texts(results: object) -> bool:
-        extracted = _extract_paddle_detections(results, vlog=_vlog, meta=last_extract_meta)
+        extracted = _extract_paddle_detections(results, verbose=verbose, vlog=_vlog, meta=last_extract_meta)
         if not extracted:
             return False
         texts = [str(item.get("text", "")) for item in extracted]
@@ -446,14 +855,16 @@ def run(
                 print("[c4.axis_ocr] ocr_method=ocr()")
                 debug["ocr_method"] = "ocr()"
                 method_logged = True
-            _vlog(f"[c4.axis_ocr] axis_crop_shape={img.shape} converted_bgr_to_rgb=False")
+            if verbose:
+                _vlog(f"[c4.axis_ocr] axis_crop_shape={img.shape} converted_bgr_to_rgb=False")
             results = ocr.ocr(img)
             _log_results(results)
             if (not _results_empty(results)) and _has_usable_texts(results):
                 return results
 
             rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            _vlog(f"[c4.axis_ocr] axis_crop_shape={rgb.shape} converted_bgr_to_rgb=True")
+            if verbose:
+                _vlog(f"[c4.axis_ocr] axis_crop_shape={rgb.shape} converted_bgr_to_rgb=True")
             results = ocr.ocr(rgb)
             _log_results(results)
             if (not _results_empty(results)) and _has_usable_texts(results):
@@ -471,8 +882,9 @@ def run(
                 tmp_path = Path(tmp.name)
             try:
                 cv2.imwrite(str(tmp_path), img)
-                _vlog(f"[c4.axis_ocr] axis_crop_shape={img.shape} converted_bgr_to_rgb=False")
-                _vlog(f"[c4.axis_ocr] ocr_temp_path={tmp_path}")
+                if verbose:
+                    _vlog(f"[c4.axis_ocr] axis_crop_shape={img.shape} converted_bgr_to_rgb=False")
+                    _vlog(f"[c4.axis_ocr] ocr_temp_path={tmp_path}")
                 results = ocr.ocr(str(tmp_path))
                 _log_results(results)
                 return results
@@ -487,66 +899,72 @@ def run(
                 return ocr.predict(img)
             raise
 
-    try:
-        for variant, scale in _preprocess_variants(axis_crop):
-            results = _run_ocr(variant) or []
-            norm = _extract_paddle_detections(results, vlog=_vlog, meta=last_extract_meta)
-            _vlog(f"[c4.axis_ocr] norm_len={len(norm)} norm_text_preview={[repr(d.get('text', '')) for d in norm[:5]]}")
-            if len(norm) > 0:
-                for item in norm:
-                    bbox = item.get("bbox")
-                    text = str(item.get("text", ""))
-                    conf = float(item.get("conf", 0.0))
-                    if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
-                        continue
-                    value = _parse_number(text)
-                    if value is None:
-                        continue
-                    x_min = int(round(float(bbox[0]) / scale))
-                    y_min = int(round(float(bbox[1]) / scale))
-                    x_max = int(round(float(bbox[2]) / scale))
-                    y_max = int(round(float(bbox[3]) / scale))
-                    y_center = (y_min + y_max) / 2.0
-                    det = OCRDetection(
-                        y_px=float(y_center),
-                        value=float(value),
-                        conf=float(conf),
-                        bbox=(x_min, y_min, x_max, y_max),
-                        text=text,
-                    )
-                    detections.append(det)
-                    debug_boxes_raw.append(
-                        {
-                            "bbox": [x_min, y_min, x_max, y_max],
-                            "text": text,
-                            "value": float(value),
-                            "conf": float(conf),
-                        }
-                    )
+    def _append_norm_results(
+        results: list[dict[str, object]],
+        scale: float,
+        detections_acc: list[OCRDetection],
+        debug_acc: list[dict[str, object]],
+    ) -> None:
+        for item in results:
+            bbox = item.get("bbox")
+            text = str(item.get("text", ""))
+            conf = float(item.get("conf", 0.0))
+            if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
                 continue
+            value = _parse_number(text)
+            if value is None:
+                continue
+            x_min = int(round(float(bbox[0]) / scale))
+            y_min = int(round(float(bbox[1]) / scale))
+            x_max = int(round(float(bbox[2]) / scale))
+            y_max = int(round(float(bbox[3]) / scale))
+            y_center = (y_min + y_max) / 2.0
+            det = OCRDetection(
+                y_px=float(y_center),
+                value=float(value),
+                conf=float(conf),
+                bbox=(x_min, y_min, x_max, y_max),
+                text=text,
+            )
+            detections_acc.append(det)
+            debug_acc.append(
+                {
+                    "bbox": [x_min, y_min, x_max, y_max],
+                    "text": text,
+                    "value": float(value),
+                    "conf": float(conf),
+                }
+            )
 
-            # Classic PaddleOCR v2 fallback path.
-            for line in results:
-                if not isinstance(line, list):
+    def _append_legacy_results(
+        results: object,
+        scale: float,
+        detections_acc: list[OCRDetection],
+        debug_acc: list[dict[str, object]],
+    ) -> None:
+        if not isinstance(results, list):
+            return
+        for line in results:
+            if not isinstance(line, list):
+                continue
+            for entry in line:
+                if not (isinstance(entry, (list, tuple)) and len(entry) >= 2):
                     continue
-                for entry in line:
-                    if not (isinstance(entry, (list, tuple)) and len(entry) >= 2):
-                        continue
-                    box = entry[0]
-                    txt_conf = entry[1]
-                    if not (isinstance(txt_conf, (list, tuple)) and len(txt_conf) >= 2):
-                        continue
-                    if not isinstance(box, (list, tuple)):
-                        continue
-                    xs = [p[0] for p in box if isinstance(p, (list, tuple)) and len(p) >= 2]
-                    ys = [p[1] for p in box if isinstance(p, (list, tuple)) and len(p) >= 2]
-                    if not xs or not ys:
-                        continue
-                    text = str(txt_conf[0])
-                    try:
-                        conf = float(txt_conf[1])
-                    except (TypeError, ValueError):
-                        conf = 0.0
+                box = entry[0]
+                txt_conf = entry[1]
+                if not (isinstance(txt_conf, (list, tuple)) and len(txt_conf) >= 2):
+                    continue
+                if not isinstance(box, (list, tuple)):
+                    continue
+                xs = [p[0] for p in box if isinstance(p, (list, tuple)) and len(p) >= 2]
+                ys = [p[1] for p in box if isinstance(p, (list, tuple)) and len(p) >= 2]
+                if not xs or not ys:
+                    continue
+                text = str(txt_conf[0])
+                try:
+                    conf = float(txt_conf[1])
+                except (TypeError, ValueError):
+                    conf = 0.0
                 value = _parse_number(text)
                 if value is None:
                     continue
@@ -562,8 +980,8 @@ def run(
                     bbox=(x_min, y_min, x_max, y_max),
                     text=text,
                 )
-                detections.append(det)
-                debug_boxes_raw.append(
+                detections_acc.append(det)
+                debug_acc.append(
                     {
                         "bbox": [x_min, y_min, x_max, y_max],
                         "text": text,
@@ -571,6 +989,27 @@ def run(
                         "conf": float(conf),
                     }
                 )
+
+    def _collect_detections_from_crop(crop: np.ndarray) -> tuple[list[OCRDetection], list[dict[str, object]]]:
+        collected: list[OCRDetection] = []
+        raw_boxes: list[dict[str, object]] = []
+        for variant, scale in _preprocess_variants(crop):
+            if verbose:
+                _vlog(f"[c4.axis_ocr] axis_crop_shape={variant.shape} converted_bgr_to_rgb=False")
+            results = _run_ocr(variant) or []
+            norm = _extract_paddle_detections(results, verbose=verbose, vlog=_vlog, meta=last_extract_meta)
+            if verbose:
+                _vlog(
+                    f"[c4.axis_ocr] norm_len={len(norm)} norm_text_preview={[repr(d.get('text', '')) for d in norm[:5]]}"
+                )
+            if len(norm) > 0:
+                _append_norm_results(norm, scale, collected, raw_boxes)
+                continue
+            _append_legacy_results(results, scale, collected, raw_boxes)
+        return collected, raw_boxes
+
+    try:
+        detections, debug_boxes_raw = _collect_detections_from_crop(axis_crop)
     except Exception as exc:
         debug["ocr_error"] = str(exc)
         debug["ocr_boxes"] = []
@@ -606,7 +1045,22 @@ def run(
         )
 
     merged = _merge_by_y(detections, config.runtime.axis_row_merge_tol_px)
-    axis_ticks = [AxisTick(value=d.value, y_px=d.y_px, conf=d.conf) for d in merged]
+    parsed_ticks = [
+        {
+            "y_px": d.y_px,
+            "value": d.value,
+            "conf": d.conf,
+            "bbox": d.bbox,
+            "text": d.text,
+        }
+        for d in merged
+    ]
+    cleaned_ticks = clean_axis_ticks(
+        parsed_ticks,
+        axis_crop.shape[1],
+        min_ticks=config.thresholds.min_ticks,
+    )
+    axis_ticks = [AxisTick(value=t["value"], y_px=t["y_px"], conf=t["conf"]) for t in cleaned_ticks]
 
     abstain = False
     reasons: list[AbstainReason] = []
@@ -630,14 +1084,18 @@ def run(
 
     # Keep only merged tick boxes for readable axis_debug overlay.
     merged_boxes: list[dict] = []
-    for tick, det in zip(axis_ticks, merged):
-        bx0, by0, bx1, by1 = det.bbox
+    for tick in cleaned_ticks:
+        bbox = tick.get("bbox")
+        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+            bx0, by0, bx1, by1 = bbox
+        else:
+            bx0 = by0 = bx1 = by1 = 0
         merged_boxes.append(
             {
                 "bbox": [int(bx0), int(by0), int(bx1), int(by1)],
-                "text": det.text,
-                "value": float(tick.value),
-                "conf": float(tick.conf),
+                "text": str(tick.get("text", "")),
+                "value": float(tick["value"]),
+                "conf": float(tick["conf"]),
             }
         )
     debug["ocr_boxes"] = merged_boxes

@@ -28,7 +28,8 @@ def run_pipeline(image_path: str | Path, config: C4Config, debug_dir: str | Path
 
     stage_frame = frame.run(image_path=image_path, config=config)
     axis_bbox = stage_frame.data.axis_bbox if stage_frame.data is not None else None
-    stage_axis = axis_ocr.run(image_path=image_path, axis_bbox=axis_bbox, config=config)
+    plot_bbox = stage_frame.data.plot_bbox if stage_frame.data is not None else None
+    stage_axis = axis_ocr.run(image_path=image_path, axis_bbox=axis_bbox, plot_bbox=plot_bbox, config=config)
     stage_candles: StageResult[float | None] = StageResult(data=None, confidence=0.0, abstain=False, reasons=[], debug={})
     if stage_frame.data is not None:
         stage_candles = candles_detect.run(
@@ -135,7 +136,8 @@ def run_pipeline(image_path: str | Path, config: C4Config, debug_dir: str | Path
             )
         write_crop(image_path, debug_path, "plot_crop.png", stage_frame.data.plot_bbox)
         write_crop(image_path, debug_path, "axis_crop.png", stage_frame.data.axis_bbox)
-        output.debug_artifacts.overlay_path = str(overlay_path)
-        output.debug_artifacts.axis_debug_path = str(axis_path)
+        # Keep JSON stable across runs regardless of debug directory location.
+        output.debug_artifacts.overlay_path = Path(config.paths.debug_overlay_name).name if overlay_path is not None else None
+        output.debug_artifacts.axis_debug_path = Path(config.paths.axis_debug_name).name if axis_path is not None else None
 
     return output
